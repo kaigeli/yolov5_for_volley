@@ -35,6 +35,7 @@ import sys
 from pathlib import Path
 
 import torch
+import math
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLOv5 root directory
@@ -114,6 +115,11 @@ def run(
     # Run inference
     model.warmup(imgsz=(1 if pt or model.triton else bs, 3, *imgsz))  # warmup
     seen, windows, dt = 0, [], (Profile(), Profile(), Profile())
+    distance = torch.tensor(0)
+    last_distance = torch.tensor(0)
+    repetition_count = 0
+    current_repetition = 0
+    last_path = 'hello 1'
     for path, im, im0s, vid_cap, s in dataset:
         with dt[0]:
             im = torch.from_numpy(im).to(model.device)
@@ -130,7 +136,13 @@ def run(
         # NMS
         with dt[2]:
             pred = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
-
+        
+        if last_path != s[:7]:
+            distance = torch.tensor(0)
+            last_distance = torch.tensor(0)
+            repetition_count = 0
+            current_repetition = 0
+            last_path = s[:7]
         # Second-stage classifier (optional)
         # pred = utils.general.apply_classifier(pred, classifier_model, im, im0s)
 
@@ -153,14 +165,33 @@ def run(
             if len(det):
                 # Rescale boxes from img_size to im0 size
                 det[:, :4] = scale_boxes(im.shape[2:], det[:, :4], im0.shape).round()
-
+                
+                column = det[:, 5]
+                mask = column == 0
+                for *xyxy, conf, cls in reversed(det[mask, :]):
+                    # 将这四个张量平均分成两个张量
+                    #tensor1, tensor2 = torch.chunk(torch.stack(xyxy), 2)
+                    # 计算距原点的欧氏距离
+                    #distance = torch.norm(tensor1 - torch.tensor([0,0]).to(device))
+                    distance = (xyxy[1]+xyxy[3])/2
+                    if distance <= last_distance:
+                            current_repetition += 1
+                        #print right_wrist position in the image
+                        #print(results.pose_landmarks.landmark[body_parts['right_wrist']].x*image.shape[1])
+                    else:
+                        # Arms are not raised, check if a repetition has been completed
+                        if current_repetition > 6:
+                            print(repetition_count)
+                            repetition_count += 1
+                            current_repetition = 0
+                    last_distance = distance
                 # Print results
                 for c in det[:, 5].unique():
                     n = (det[:, 5] == c).sum()  # detections per class
                     s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
 
                 # Write results
-                for *xyxy, conf, cls in reversed(det):
+                for *xyxy, conf, cls in reversed(det[mask, :]):
                     if save_txt:  # Write to file
                         xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
                         line = (cls, *xywh, conf) if save_conf else (cls, *xywh)  # label format
@@ -176,6 +207,7 @@ def run(
 
             # Stream results
             im0 = annotator.result()
+            cv2.putText(im0, f'Repetitions: {repetition_count} ' , (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
             if view_img:
                 if platform.system() == 'Linux' and p not in windows:
                     windows.append(p)
@@ -218,9 +250,9 @@ def run(
 
 def parse_opt():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'yolov5s.pt', help='model path or triton URL')
-    parser.add_argument('--source', type=str, default=ROOT / 'data/images', help='file/dir/URL/glob/screen/0(webcam)')
-    parser.add_argument('--data', type=str, default=ROOT / 'data/coco128.yaml', help='(optional) dataset.yaml path')
+    parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'data/my_best.pt', help='model path or triton URL')
+    parser.add_argument('--source', type=str, default=ROOT / 'data/testVideo', help='file/dir/URL/glob/screen/0(webcam)')
+    parser.add_argument('--data', type=str, default=ROOT / 'data/volleyball_person.yaml', help='(optional) dataset.yaml path')
     parser.add_argument('--imgsz', '--img', '--img-size', nargs='+', type=int, default=[640], help='inference size h,w')
     parser.add_argument('--conf-thres', type=float, default=0.25, help='confidence threshold')
     parser.add_argument('--iou-thres', type=float, default=0.45, help='NMS IoU threshold')
